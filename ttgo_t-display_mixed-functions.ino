@@ -5,6 +5,9 @@
 #include <Button2.h>
 #include "esp_adc_cal.h"
 #include "bmp.h"
+#include "settings.h"
+#include <WiFiManager.h>
+#include <ArduinoOTA.h>
 
 #ifndef TFT_DISPOFF
 #define TFT_DISPOFF 0x28
@@ -34,16 +37,19 @@ char buff[512];
 int vref = 1100;
 int btnCick = false;
 
+//gets called when WiFiManager enters configuration mode
+void configModeCallback (WiFiManager *myWiFiManager) {
+  //entered config mode
+}
+
 //! Long time delay, it is recommended to use shallow sleep, which can effectively reduce the current consumption
-void espDelay(int ms)
-{   
+void espDelay(int ms){   
     esp_sleep_enable_timer_wakeup(ms * 1000);
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,ESP_PD_OPTION_ON);
     esp_light_sleep_start();
 }
 
-void showVoltage()
-{
+void showVoltage(){
     static uint64_t timeStamp = 0;
     if (millis() - timeStamp > 1000) {
         timeStamp = millis();
@@ -57,8 +63,7 @@ void showVoltage()
     }
 }
 
-void button_init()
-{
+void button_init(){
     btn1.setLongClickHandler([](Button2 & b) {
         btnCick = false;
         int r = digitalRead(TFT_BL);
@@ -86,14 +91,12 @@ void button_init()
     });
 }
 
-void button_loop()
-{
+void button_loop(){
     btn1.loop();
     btn2.loop();
 }
 
-void wifi_scan()
-{
+void wifi_scan(){
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.fillScreen(TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
@@ -125,8 +128,7 @@ void wifi_scan()
     WiFi.mode(WIFI_OFF);
 }
 
-void setup()
-{
+void setup(){
     Serial.begin(115200);
     Serial.println("Start");
     tft.init();
@@ -147,6 +149,38 @@ void setup()
 
     tft.setSwapBytes(true);
     tft.pushImage(0, 0,  240, 135, ttgo);
+    
+    //WiFiManager
+    //Local intialization. Once its business is done, there is no need to keep it around
+    WiFiManager wm;
+    //reset settings - for testing
+    //wm.resetSettings();
+    //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
+    wm.setAPCallback(configModeCallback);
+
+    //fetches ssid and pass and tries to connect
+    //if it does not connect it starts an access point with the specified name
+    //here  "AutoConnectAP"
+    //and goes into a blocking loop awaiting configuration
+    if (!wm.autoConnect(WIFI_HOSTNAME, "pa55w0rd")) {
+      //reset and try again, or maybe put it to deep sleep
+      ESP.restart();
+      delay(1000);
+    }
+
+  
+    ArduinoOTA.setHostname(WIFI_HOSTNAME);
+    ArduinoOTA.onStart([]() {
+    });
+    ArduinoOTA.onEnd([]() {
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+    });
+    // Start the server
+    ArduinoOTA.begin();
+    
     espDelay(5000);
 
     tft.setRotation(0);
@@ -177,8 +211,8 @@ void setup()
 
 
 
-void loop()
-{
+void loop() {
+    ArduinoOTA.handle();
     if (btnCick) {
         showVoltage();
     }
