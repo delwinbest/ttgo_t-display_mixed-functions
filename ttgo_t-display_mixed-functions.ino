@@ -2,12 +2,12 @@
 #include <SPI.h>
 #include "WiFi.h"
 #include <Wire.h>
-#include <Button2.h>
 #include "esp_adc_cal.h"
 #include "bmp.h"
 #include "settings.h"
 #include <WiFiManager.h>
 #include <ArduinoOTA.h>
+#include "GfxUi.h"          
 
 #ifndef TFT_DISPOFF
 #define TFT_DISPOFF 0x28
@@ -28,14 +28,14 @@
 #define ADC_PIN         34
 #define BUTTON_1        35
 #define BUTTON_2        0
+#define TFT_HIGHT       135
+#define TFT_WIDTH       240
 
-TFT_eSPI tft = TFT_eSPI(135, 240); // Invoke custom library
-Button2 btn1(BUTTON_1);
-Button2 btn2(BUTTON_2);
+TFT_eSPI tft = TFT_eSPI(TFT_HIGHT, TFT_WIDTH); // Invoke custom library
+GfxUi ui = GfxUi(&tft); // Jpeg and bmpDraw function
 
 char buff[512];
 int vref = 1100;
-int btnCick = false;
 
 //gets called when WiFiManager enters configuration mode
 void configModeCallback (WiFiManager *myWiFiManager) {
@@ -46,7 +46,10 @@ void configModeCallback (WiFiManager *myWiFiManager) {
 void espDelay(int ms){   
     esp_sleep_enable_timer_wakeup(ms * 1000);
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,ESP_PD_OPTION_ON);
+    Serial.printf("%u Going to sleep...\n\r", esp_timer_get_time()/1000 ); 
+    Serial.flush();
     esp_light_sleep_start();
+    Serial.printf("%u waking up...\n\r", esp_timer_get_time()/1000 ); 
 }
 
 void showVoltage(){
@@ -63,70 +66,24 @@ void showVoltage(){
     }
 }
 
-void button_init(){
-    btn1.setLongClickHandler([](Button2 & b) {
-        btnCick = false;
-        int r = digitalRead(TFT_BL);
-        tft.fillScreen(TFT_BLACK);
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.setTextDatum(MC_DATUM);
-        tft.drawString("Press again to wake up",  tft.width() / 2, tft.height() / 2 );
-        espDelay(6000);
-        digitalWrite(TFT_BL, !r);
-
-        tft.writecommand(TFT_DISPOFF);
-        tft.writecommand(TFT_SLPIN);
-        esp_sleep_enable_ext1_wakeup(GPIO_SEL_35, ESP_EXT1_WAKEUP_ALL_LOW);
-        esp_deep_sleep_start();
-    });
-    btn1.setPressedHandler([](Button2 & b) {
-        Serial.println("Detect Voltage..");
-        btnCick = true;
-    });
-
-    btn2.setPressedHandler([](Button2 & b) {
-        btnCick = false;
-        Serial.println("btn press wifi scan");
-        wifi_scan();
-    });
-}
-
-void button_loop(){
-    btn1.loop();
-    btn2.loop();
-}
-
-void wifi_scan(){
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+/***************************************************************************************
+**                          Update progress bar
+***************************************************************************************/
+void drawProgress(uint8_t percentage, String text) {
+  if ( percentage == 0 ) {
+    tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
+    digitalWrite(TFT_BL, HIGH);
+    tft.setTextDatum(BC_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    //tft.setTextPadding(240);
+  }
 
-    tft.drawString("Scan Network", tft.width() / 2, tft.height() / 2);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
-
-    int16_t n = WiFi.scanNetworks();
-    tft.fillScreen(TFT_BLACK);
-    if (n == 0) {
-        tft.drawString("no networks found", tft.width() / 2, tft.height() / 2);
-    } else {
-        tft.setTextDatum(TL_DATUM);
-        tft.setCursor(0, 0);
-        Serial.printf("Found %d net\n", n);
-        for (int i = 0; i < n; ++i) {
-            sprintf(buff,
-                    "[%d]:%s(%d)",
-                    i + 1,
-                    WiFi.SSID(i).c_str(),
-                    WiFi.RSSI(i));
-            tft.println(buff);
-        }
-    }
-    WiFi.mode(WIFI_OFF);
+  tft.drawString(text, 70, (TFT_WIDTH/2)-10);
+  ui.drawProgressBar(20, (TFT_HIGHT/2) + 10, (TFT_WIDTH - 40), 15, percentage, TFT_WHITE, TFT_BLUE);
+  //tft.setTextPadding(0);
 }
+
 
 void setup(){
     Serial.begin(115200);
@@ -140,11 +97,6 @@ void setup(){
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
 
-    //! The backlight has been initialized in the TFT_eSPI library
-    // if (TFT_BL > 0) {
-    //     pinMode(TFT_BL, OUTPUT);
-    //     digitalWrite(TFT_BL, HIGH);
-    // }
 
 
     tft.setSwapBytes(true);
@@ -171,50 +123,53 @@ void setup(){
   
     ArduinoOTA.setHostname(WIFI_HOSTNAME);
     ArduinoOTA.onStart([]() {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH)
+        type = "sketch";
+      else // U_SPIFFS
+        type = "filesystem";
+  
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      Serial.println("Start updating " + type);
     });
     ArduinoOTA.onEnd([]() {
+      Serial.println("\nEnd");
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      drawProgress((progress / (total / 100)), "OTA Update...");
+      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
     });
     ArduinoOTA.onError([](ota_error_t error) {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) { Serial.println("Auth Failed"); drawProgress(0, "ERROR: OTA Auth Failed"); }
+      else if (error == OTA_BEGIN_ERROR) { Serial.println("Begin Failed"); drawProgress(0, "ERROR: OTA Begin Failed"); }
+      else if (error == OTA_CONNECT_ERROR) { Serial.println("Connect Failed"); drawProgress(0, "ERROR: OTA Connect Failed"); }
+      else if (error == OTA_RECEIVE_ERROR) { Serial.println("Receive Failed"); drawProgress(0, "ERROR: OTA Receive Failed"); }
+      else if (error == OTA_END_ERROR) { Serial.println("End Failed"); drawProgress(0, "ERROR: OTA Auth Failed"); }
     });
     // Start the server
     ArduinoOTA.begin();
     
-    espDelay(5000);
-
-    tft.setRotation(0);
-    int i = 5;
-    while (i--) {
-        tft.fillScreen(TFT_RED);
-        espDelay(1000);
-        tft.fillScreen(TFT_BLUE);
-        espDelay(1000);
-        tft.fillScreen(TFT_GREEN);
-        espDelay(1000);
-    }
-
-    button_init();
+    espDelay(1000);
 
     esp_adc_cal_characteristics_t adc_chars;
     esp_adc_cal_value_t val_type = esp_adc_cal_characterize((adc_unit_t)ADC_UNIT_1, (adc_atten_t)ADC1_CHANNEL_6, (adc_bits_width_t)ADC_WIDTH_BIT_12, 1100, &adc_chars);
     //Check type of calibration value used to characterize ADC
     if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-        Serial.printf("eFuse Vref:%u mV", adc_chars.vref);
+        Serial.printf("eFuse Vref:%u mV\n\r", adc_chars.vref);
         vref = adc_chars.vref;
     } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
         Serial.printf("Two Point --> coeff_a:%umV coeff_b:%umV\n", adc_chars.coeff_a, adc_chars.coeff_b);
     } else {
         Serial.println("Default Vref: 1100mV");
     }
+    //Turn Off BL
+    digitalWrite(TFT_BL, LOW);
 }
 
 
 
 void loop() {
+    //delay(300);
     ArduinoOTA.handle();
-    if (btnCick) {
-        showVoltage();
-    }
-    button_loop();
 }
